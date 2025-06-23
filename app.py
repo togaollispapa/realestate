@@ -1,3 +1,4 @@
+```python
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -9,27 +10,34 @@ from io import BytesIO
 
 # ---------- Helpers ----------
 
-def parse_mongolian_date(raw: str) -> str:
+def parse_mongolian_date(raw: str) -> datetime:
+    """Parses Mongolian relative dates into datetime objects."""
     now = datetime.now()
-    raw = raw.strip()
-    if "Өнөөдөр" in raw:
-        time_part = raw.replace("Өнөөдөр", "").strip()
-        return f"{now:%Y-%m-%d} {time_part}"
-    elif "Өчигдөр" in raw:
-        time_part = raw.replace("Өчигдөр", "").strip()
+    text = raw.strip()
+    if "Өнөөдөр" in text:
+        time_part = text.replace("Өнөөдөр", "").strip()
+        return datetime.strptime(f"{now:%Y-%m-%d} {time_part}", "%Y-%m-%d %H:%M")
+    if "Өчигдөр" in text:
+        time_part = text.replace("Өчигдөр", "").strip()
         yesterday = now - timedelta(days=1)
-        return f"{yesterday:%Y-%m-%d} {time_part}"
-    return raw
+        return datetime.strptime(f"{yesterday:%Y-%m-%d} {time_part}", "%Y-%m-%d %H:%M")
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return now
+
 
 def get_last_page(base_url: str) -> int:
     response = requests.get(base_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     response.raise_for_status()
     soup = BeautifulSoup(response.content, "html.parser")
     page_nums = {
-        int(m.group(1)) for a in soup.find_all('a', href=True)
+        int(m.group(1))
+        for a in soup.find_all('a', href=True)
         if (m := re.search(r'[?&]page=(\d+)', a['href']))
     }
     return max(page_nums) if page_nums else 1
+
 
 def scrape_detail_page(url: str) -> dict | None:
     try:
@@ -41,28 +49,32 @@ def scrape_detail_page(url: str) -> dict | None:
         price_meta = soup.select_one('meta[itemprop="price"]')
         sku_el = soup.select_one('span[itemprop="sku"]')
         loc_el = soup.select_one("span[itemprop='address']") or soup.select_one("#show-post-render-app a[href] span")
-        date_el = soup.find(lambda tag: tag.name == "span" and "Нийтэлсэн:" in tag.text)
+        date_span = soup.find(lambda tag: tag.name == "span" and "Нийтэлсэн:" in tag.text)
+        date_val = None
+        if date_span:
+            raw_date = date_span.get_text(strip=True).replace("Нийтэлсэн:", "").strip()
+            date_val = parse_mongolian_date(raw_date)
 
         props = {}
         for li in soup.select("ul.chars-column > li"):
             key = li.select_one(".key-chars")
             val = li.select_one(".value-chars")
             if key and val:
-                k = key.get_text(strip=True).rstrip(":")
-                props[k] = val.get_text(strip=True)
+                props[key.get_text(strip=True).rstrip(":")] = val.get_text(strip=True)
 
         return {
             "Title": title_el.get_text(strip=True) if title_el else None,
             "Price": price_meta["content"] if price_meta else None,
             "Ad_ID": sku_el.get_text(strip=True) if sku_el else None,
             "Location": loc_el.get_text(strip=True) if loc_el else None,
-            "Date": parse_mongolian_date(date_el.get_text(strip=True).replace("Нийтэлсэн:", "").strip()) if date_el else None,
+            "Date": date_val,
             "URL": url,
             **props
         }
     except Exception as e:
         st.warning(f"Failed to scrape {url}: {e}")
         return None
+
 
 def scrape_category(base_url: str, max_workers: int) -> pd.DataFrame:
     total_pages = get_last_page(base_url)
@@ -90,50 +102,17 @@ def scrape_category(base_url: str, max_workers: int) -> pd.DataFrame:
 
     return pd.DataFrame(scraped)
 
-
 # ---------- Categories ----------
 
 categories = {
-    "apartments": {
-        "label": "Орон сууц зарна",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/oron-suuts-zarna/",
-        "default_output": "unegui_apartments.xlsx"
-    },
-    "land": {
-        "label": "Газар зарна",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/gazar/",
-        "default_output": "unegui_land.xlsx"
-    },
-    "commercial": {
-        "label": "Худалдаа үйлчилгээний талбай",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/hudaldaa-jlchilgeenij-talbaj-zarna/",
-        "default_output": "unegui_commercial.xlsx"
-    },
-    "houses": {
-        "label": "АОС, хаус, зуслан",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/a-o-s-hauszuslan/",
-        "default_output": "unegui_houses.xlsx"
-    },
-    "factory_warehouse": {
-        "label": "Үйлдвэр, агуулах, объект",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/obekt/",
-        "default_output": "unegui_factory_warehouse.xlsx"
-    },
-    "ger_fenced": {
-        "label": "Хашаа байшин, гэр",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/hashaa-bajshin/",
-        "default_output": "unegui_ger_fenced.xlsx"
-    },
-    "office": {
-        "label": "Ажлын байр, оффис",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/azhlyin-bajroffis-zarna/",
-        "default_output": "unegui_office.xlsx"
-    },
-    "garage_storage": {
-        "label": "Гараж, склад, контейнер",
-        "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/garazhskladkont-r/",
-        "default_output": "unegui_garage_storage.xlsx"
-    }
+    "apartments": {"label": "Орон сууц зарна", "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/oron-suuts-zarna/", "default_output": "unegui_apartments.xlsx"},
+    "land":       {"label": "Газар зарна",      "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/gazar/",      "default_output": "unegui_land.xlsx"},
+    "commercial": {"label": "Худалдаа үйлчилгээний талбай", "url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/hudaldaa-jlchilgeenij-talbaj-zarna/", "default_output": "unegui_commercial.xlsx"},
+    "houses":     {"label": "АОС, хаус, зуслан","url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/a-o-s-hauszuslan/","default_output": "unegui_houses.xlsx"},
+    "factory_warehouse": {"label": "Үйлдвэр, агуулах, объект","url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/obekt/","default_output": "unegui_factory_warehouse.xlsx"},
+    "ger_fenced": {"label": "Хашаа байшин, гэр","url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/hashaa-bajshin/","default_output": "unegui_ger_fenced.xlsx"},
+    "office":     {"label": "Ажлын байр, оффис","url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/azhlyin-bajroffis-zarna/","default_output": "unegui_office.xlsx"},
+    "garage_storage": {"label": "Гараж, склад, контейнер","url": "https://www.unegui.mn/l-hdlh/l-hdlh-zarna/garazhskladkont-r/","default_output": "unegui_garage_storage.xlsx"}
 }
 
 # ---------- Streamlit App ----------
@@ -141,6 +120,13 @@ categories = {
 st.title("🏘️ Unegui.mn Real Estate Scraper")
 st.markdown("Scrape real estate listings from **Unegui.mn** by category and export them to Excel.")
 
+# Date mode
+mode = st.radio("Date extraction mode:", ["All Dates", "Custom Range"], index=1)
+if mode == "Custom Range":
+    start_date = st.date_input("Start date", value=datetime.now().date() - timedelta(days=7))
+    end_date = st.date_input("End date", value=datetime.now().date())
+
+# Category selection
 selected = st.multiselect(
     "Choose categories to scrape:",
     options=list(categories.keys()),
@@ -156,11 +142,25 @@ if st.button("Start Scraping") and selected:
         cat = categories[key]
         st.subheader(f"📂 {cat['label']}")
         df = scrape_category(cat["url"], max_workers)
-        st.success(f"✅ Scraped {len(df)} ads.")
+        # Apply date filter if selected
+        if mode == "Custom Range":
+            df = df[df["Date"].between(
+                datetime.combine(start_date, datetime.min.time()),
+                datetime.combine(end_date, datetime.max.time())
+            )]
+            st.success(f"✅ Scraped {len(df)} ads between {start_date} and {end_date}.")
+        else:
+            st.success(f"✅ Scraped {len(df)} ads (all dates).")
 
         st.dataframe(df)
 
-        filename = st.text_input(f"Save as filename for {cat['label']}", value=cat["default_output"], key=key)
+        # Auto-timestamped filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = "all" if mode == "All Dates" else f"{start_date}_{end_date}"
+        default_name = cat["default_output"].replace(".xlsx", f"_{suffix}_{timestamp}.xlsx")
+        filename = st.text_input(
+            f"Save as filename for {cat['label']}", value=default_name, key=key
+        )
         full_path = output_path.rstrip("/\\") + "/" + filename
 
         # Save locally
@@ -180,3 +180,4 @@ if st.button("Start Scraping") and selected:
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+```
