@@ -124,7 +124,7 @@ st.title("🏘️ Unegui.mn Web Scraper")
 st.markdown("Unegui.mn дэх үл хөдлөх хөрөнгийн зар")
 
 # Date mode
-mode = st.radio("Өдөр :", ["All Dates", "Custom Range"], index=1)
+mode = st.radio("Date Options :", ["All Dates", "Custom Range"], index=1)
 if mode == "Custom Range":
     start_date = st.date_input("Start date", value=datetime.now().date() - timedelta(days=7))
     end_date = st.date_input("End date", value=datetime.now().date())
